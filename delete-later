@@ -1,0 +1,53 @@
+dreamer4/
+│
+├── README.md
+├── LICENSE
+├── pyproject.toml / setup.py
+├── requirements.txt
+├── .gitignore
+│
+├── configs/
+│   ├── default.yaml
+│   ├── atari.yaml
+│   ├── dm_control.yaml
+│   └── debug.yaml
+│
+├── dreamer4/
+│   ├── __init__.py
+│   │
+│   ├── models/
+│   │   ├── encoder.py
+│   │   ├── decoder.py
+│   │   ├── rssm.py
+│   │   ├── world_model.py
+│   │   ├── actor.py
+│   │   ├── critic.py
+│   │   └── heads.py
+│   │
+│   ├── training/
+│   │   ├── trainer.py
+│   │   ├── losses.py
+│   │   ├── imagination.py
+│   │   └── replay_buffer.py
+│   │
+│   ├── envs/
+│   │   ├── wrappers.py
+│   │   └── make_env.py
+│   │
+│   ├── utils/
+│   │   ├── distributions.py
+│   │   ├── schedules.py
+│   │   ├── logger.py
+│   │   └── seed.py
+│   │
+│   └── evaluation/
+│       ├── evaluate.py
+│       └── metrics.py
+│
+├── scripts/
+│   ├── train.py
+│   ├── evaluate.py
+│   └── visualize_rollout.py
+│
+└── experiments/
+    └── (saved runs)
