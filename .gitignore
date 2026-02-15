@@ -1,1 +1,29 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+venv/
 dreamerlearn/
+
+# Jupyter Notebook checkpoints
+.ipynb_checkpoints
+
+# Distribution / packaging
+build/
+dist/
+*.egg-info/
+
+# PyTorch
+*.pt
+*.pth
+
+# Logs
+*.log
+
+# Mac system files
+.DS_Store
+
+# VS Code
+.vscode/

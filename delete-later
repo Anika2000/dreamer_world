@@ -51,3 +51,19 @@ dreamer4/
 │
 └── experiments/
     └── (saved runs)
+
+
+# Environment
+#     ↓
+# Replay Buffer
+#     ↓
+# World Model
+#     ↓
+# Imagination
+#     ↓
+# Actor-Critic
+
+
+# - so the envionement is to collect the data from simulation (use mujoco and all that)
+# - goal is using world model to control so-101 arm (yes i need to get this asap)
+#delete the test files like test_encoder.py under the sripts folder 
