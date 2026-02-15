@@ -5,7 +5,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.distributions import OneHotCategorical
+from torch.distributions import OneHotCategorical, RelaxedOneHotCategorical
 
 class RSSM(nn.Module):
     def __init__(self, action_dim, embedding_dim, hidden_dim=200, latent_dim=32, categories=32):
@@ -49,7 +49,7 @@ class RSSM(nn.Module):
             nn.Linear(400, latent_dim * categories),
         )
     
-    def forward(self, prev_h, prev_z, prev_a, embed):
+    def forward(self, prev_h, prev_z, prev_a, embed, use_relaxed=False, temperature=0.67):
         # prev_z: shape (B, latent_dim, categories) one-hot or logits
         # flatten categorical latent for GRU input
         # so for example if prev_z.shape returned (8, 4, 3), after the below line
@@ -73,12 +73,21 @@ class RSSM(nn.Module):
         post_logits = post_logits.view(-1, self.latent_dim, self.categories)
         #the below line turns the (32,32) logits into a categorical distribution,
         #and then the sampling gives your concrete latent vector z
-        post_dist = OneHotCategorical(logits=post_logits) 
-        z = post_dist.rsample()  # relaxed sample
+        if use_relaxed: #for training because during training, you need gradients to flow
+            #through z_t so the encoder and RSSM can improve together 
+            post_dist = RelaxedOneHotCategorical(temperature=temperature, logits=post_logits)
+            z = post_dist.rsample()
+        else:
+            post_dist = OneHotCategorical(logits=post_logits) 
+            z = post_dist.sample()  # relaxed sample
         
         # prior logits (from h only)
         prior_logits = self.prior_net(h)
         prior_logits = prior_logits.view(-1, self.latent_dim, self.categories)
-        prior_dist = OneHotCategorical(logits=prior_logits)
-        z_prior = prior_dist.rsample()
+        if use_relaxed: 
+            prior_dist = RelaxedOneHotCategorical(temperature=temperature, logits=prior_logits)
+            z_prior = prior_dist.rsample()
+        else:
+            prior_dist = OneHotCategorical(logits=prior_logits)
+            z_prior = prior_dist.sample()
         return h, z, z_prior, post_dist, prior_dist
