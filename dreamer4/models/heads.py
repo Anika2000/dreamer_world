@@ -40,3 +40,22 @@ class ValueHead(nn.Module):
         x = torch.cat([h, z], dim=-1)
         value = self.fc(x)
         return value
+
+#predicts a scalar between 0 and 1, which matches the paper: 
+# it learns to approximate γ from the latent state (h_t, z_t)
+class DiscountHead(nn.Module):
+    """Predicts discount (0 or 1) for given latent state"""
+    def __init__(self, hidden_dim, latent_dim, categories):
+        super().__init__()
+        self.fc = nn.Sequential(
+            nn.Linear(hidden_dim + latent_dim * categories, 400),
+            nn.ReLU(),
+            nn.Linear(400, 1),
+            nn.Sigmoid()  # output in [0,1]
+        )
+
+    def forward(self, h, z):
+        z = z.view(z.size(0), -1)
+        x = torch.cat([h, z], dim=-1)
+        discount = self.fc(x)
+        return discount

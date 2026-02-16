@@ -1,6 +1,7 @@
 import torch
+import torch.nn as nn
 
-def world_model_loss(out, obs, reward, free_nats=3.0):
+def world_model_loss(out, obs, reward, discount=None, beta=1.0, free_nats=3.0):
     """
     Computes the losses for the WorldModel.
     
@@ -15,6 +16,7 @@ def world_model_loss(out, obs, reward, free_nats=3.0):
         obs_loss: reconstruction loss
         reward_loss: reward prediction loss
         kl_loss: KL divergence loss
+        discount loss
     """
     # Reconstruction loss (mean squared error)
     obs_loss = ((out["reconstructed"] - obs) ** 2).mean()
@@ -24,8 +26,19 @@ def world_model_loss(out, obs, reward, free_nats=3.0):
     
     # KL divergence between posterior and prior
     kl = torch.distributions.kl_divergence(out["post_dist"], out["prior_dist"])
-    kl_loss = torch.clamp(kl.mean(), min=free_nats)
+    kl = kl.mean()
+    kl = torch.clamp(kl, min=free_nats)
+    kl_loss = beta * kl
+
+        # Discount loss 
+    if discount is not None:
+        pred_discount = out["discount"]
+        discount_loss = nn.functional.mse_loss(pred_discount, discount)
+    else:
+        discount_loss = 0.0
     
     # Total loss
-    total_loss = obs_loss + reward_loss + kl_loss
-    return total_loss, obs_loss, reward_loss, kl_loss
+    total_loss = obs_loss + reward_loss + kl_loss + discount_loss
+    return total_loss, obs_loss, reward_loss, kl_loss, discount_loss
+
+
