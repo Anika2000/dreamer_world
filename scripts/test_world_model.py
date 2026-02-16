@@ -1,54 +1,80 @@
 import torch
-
 from dreamer4.models.encoder import Encoder
 from dreamer4.models.rssm import RSSM
+from dreamer4.models.decoder import Decoder  # make sure you have this implemented
+
 def main():
     # ---- Configuration ----
+    config = {
+        "env": {
+            "channels": 3,
+            "image_size": 64,
+            "action_dim": 6,
+        },
+        "model": {
+            "embedding_dim": 1024,
+            "hidden_dim": 200,
+            "latent_dim": 32,
+            "categories": 32,
+            "encoder_channels": [32, 64, 128, 256],
+            "decoder_channels": [256, 128, 64, 32],  # example decoder channels
+        }
+    }
+
     batch_size = 8
-    channels = 3
-    width, height = 64, 64
-    embedding_dim = 1024
-    action_dim = 6   # example: 6-DoF for robot arm
-    hidden_dim = 200
-    latent_dim = 32
-    categories = 32
 
     # ---- Dummy input ----
-    # Simulate a batch of images
-    images = torch.randn(batch_size, channels, width, height)
-    # Simulate previous action and previous latent
-    prev_a = torch.randn(batch_size, action_dim)
-    prev_h = torch.zeros(batch_size, hidden_dim)
-    prev_z = torch.zeros(batch_size, latent_dim, categories)
-    prev_z[:, :, 0] = 1  # simple one-hot initial z
+    images = torch.randn(batch_size, 3, 64, 64)
+    prev_a = torch.randn(batch_size, config["env"]["action_dim"])
+    prev_h = torch.zeros(batch_size, config["model"]["hidden_dim"])
+    prev_z = torch.zeros(
+        batch_size,
+        config["model"]["latent_dim"],
+        config["model"]["categories"],
+    )
+    prev_z[:, :, 0] = 1
 
     # ---- Encoder ----
-    encoder = Encoder(channels=channels, embedding_dim=embedding_dim)
+    encoder = Encoder(config)
     embed = encoder(images)
-    print("Embedding shape:", embed.shape)  # should be (B, embedding_dim)
+    print("Embedding shape:", embed.shape)  # (B, embedding_dim)
 
     # ---- RSSM ----
-    rssm = RSSM(action_dim, embedding_dim, hidden_dim, latent_dim, categories)
+    rssm = RSSM(
+        config["env"]["action_dim"],
+        config["model"]["embedding_dim"],
+        config["model"]["hidden_dim"],
+        config["model"]["latent_dim"],
+        config["model"]["categories"],
+    )
 
-    # ---- Test discrete sampling ----
-    h, z, z_prior, post_dist, prior_dist = rssm(prev_h, prev_z, prev_a, embed, use_relaxed=False)
-    print("Discrete sampling shapes:")
+    # ---- Discrete sampling ----
+    h, z, z_prior, post_dist, prior_dist = rssm(
+        prev_h, prev_z, prev_a, embed, use_relaxed=False
+    )
+
+    print("\nDiscrete sampling shapes:")
     print("h:", h.shape)
     print("z:", z.shape)
     print("z_prior:", z_prior.shape)
 
-    # ---- Test relaxed sampling (training-ready) ----
-    h_relax, z_relax, z_prior_relax, post_dist_relax, prior_dist_relax = rssm(
+    # ---- Decoder ----
+    decoder = Decoder(config)
+    reconstructed_images = decoder(h, z)
+    print("\nReconstructed image shape:", reconstructed_images.shape)
+    # should be (B, channels, 64, 64)
+
+    # ---- Relaxed sampling + gradient check ----
+    h_relax, z_relax, z_prior_relax, _, _ = rssm(
         prev_h, prev_z, prev_a, embed, use_relaxed=True, temperature=0.67
     )
-    print("\nRelaxed sampling shapes (differentiable):")
-    print("h:", h_relax.shape)
-    print("z:", z_relax.shape)
-    print("z_prior:", z_prior_relax.shape)
 
-    # ---- Optional gradient check ----
-    z_relax.sum().backward()  # should propagate gradients without errors
-    print("\nGradients flow correctly for relaxed z")
+    reconstructed_images_relax = decoder(h_relax, z_relax)
+    print("Reconstructed image shape (relaxed):", reconstructed_images_relax.shape)
+
+    # Gradient test
+    reconstructed_images_relax.mean().backward()
+    print("\nGradients flow correctly through decoder + relaxed z")
 
 if __name__ == "__main__":
     main()

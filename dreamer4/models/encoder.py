@@ -2,21 +2,27 @@ import torch
 import torch.nn as nn 
 
 #input → conv1 (→ smaller spatial) → conv2 → conv3 → conv4 -> flatten → linear → embedding
-class Encoder(nn.Module): 
-    def __init__(self, channels=3, embedding_dim=1024) :
+class Encoder(nn.Module):
+    def __init__(self, config):
         super().__init__()
-        #channels: each layer increases the number of feature maps
-        self.conv1 = nn.Conv2d(channels, 32, kernel_size=3, stride=2, padding=1)
-        self.conv2 = nn.Conv2d(32, 64, kernel_size=3, stride=2, padding=1)
-        self.conv3 = nn.Conv2d(64, 128, kernel_size=3, stride=2, padding=1)
-        self.conv4 = nn.Conv2d(128, 256, kernel_size=3, stride=2, padding=1)
-        self.relu = nn.ReLU()
-        self.fc = nn.Linear(4*4*256, embedding_dim)
+        channels = config["env"]["channels"]
+        enc_channels = config["model"]["encoder_channels"]
+        embedding_dim = config["model"]["embedding_dim"]
+
+        layers = []
+        in_ch = channels
+        for out_ch in enc_channels:
+            layers.append(nn.Conv2d(in_ch, out_ch, 3, stride=2, padding=1))
+            layers.append(nn.ReLU())
+            in_ch = out_ch
+
+        self.conv = nn.Sequential(*layers)
+
+        final_size = enc_channels[-1] * 4 * 4  # for 64x64 input
+        self.fc = nn.Linear(final_size, embedding_dim)
+
     def forward(self, x):
-        x = self.relu(self.conv1(x))
-        x = self.relu(self.conv2(x))
-        x = self.relu(self.conv3(x))
-        x = self.relu(self.conv4(x))
-        x = torch.flatten(x, start_dim=1)
-        x = self.fc(x)
+        x = self.conv(x) #go through the convolution later which is conv -> relu -> conv -> relu ... etc
+        x = torch.flatten(x, start_dim=1) #flatten from (B, a, b, c) -> (B, a*b*c)
+        x = self.fc(x) #commpresses more? 
         return x

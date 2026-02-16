@@ -1,0 +1,21 @@
+env:
+  image_size: 64
+  channels: 3
+  action_dim: 6   # change per environment
+
+model:
+  embedding_dim: 1024
+  hidden_dim: 256
+  latent_dim: 32
+  categories: 32
+
+  encoder_channels: [32, 64, 128, 256]
+  decoder_channels: [256, 128, 64, 32]
+
+  mlp_dim: 400
+
+training:
+  batch_size: 16
+  seq_len: 50
+  lr: 3e-4
+  kl_scale: 1.0
