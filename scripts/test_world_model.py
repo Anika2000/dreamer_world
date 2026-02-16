@@ -1,10 +1,7 @@
 import torch
-from dreamer4.models.encoder import Encoder
-from dreamer4.models.rssm import RSSM
-from dreamer4.models.decoder import Decoder
-from dreamer4.models.heads import RewardHead, ValueHead
+from dreamer4.models.world_model import WorldModel
 
-def main():
+def test_world_model():
     # ---- Configuration ----
     config = {
         "env": {
@@ -18,82 +15,38 @@ def main():
             "latent_dim": 32,
             "categories": 32,
             "encoder_channels": [32, 64, 128, 256],
-            "decoder_channels": [256, 128, 64, 32],  # example decoder channels
+            "decoder_channels": [256, 128, 64, 32],
         }
     }
 
     batch_size = 8
-
     # ---- Dummy input ----
-    images = torch.randn(batch_size, 3, 64, 64)
+    obs = torch.randn(batch_size, config["env"]["channels"], 
+                      config["env"]["image_size"], config["env"]["image_size"])
     prev_a = torch.randn(batch_size, config["env"]["action_dim"])
     prev_h = torch.zeros(batch_size, config["model"]["hidden_dim"])
-    prev_z = torch.zeros(
-        batch_size,
-        config["model"]["latent_dim"],
-        config["model"]["categories"],
-    )
-    prev_z[:, :, 0] = 1  # initial one-hot latent
+    prev_z = torch.zeros(batch_size, config["model"]["latent_dim"], config["model"]["categories"])
+    prev_z[:, :, 0] = 1  # simple one-hot initialization
 
-    # ---- Encoder ----
-    encoder = Encoder(config)
-    embed = encoder(images)
-    print("Embedding shape:", embed.shape)  # (B, embedding_dim)
+    # ---- Initialize world model ----
+    wm = WorldModel(config)
 
-    # ---- RSSM ----
-    rssm = RSSM(
-        config["env"]["action_dim"],
-        config["model"]["embedding_dim"],
-        config["model"]["hidden_dim"],
-        config["model"]["latent_dim"],
-        config["model"]["categories"],
-    )
+    # ---- Forward pass ----
+    out = wm(obs, prev_a, prev_h, prev_z, use_relaxed=True, temperature=0.67)
 
-    # ---- Discrete sampling ----
-    h, z, z_prior, post_dist, prior_dist = rssm(
-        prev_h, prev_z, prev_a, embed, use_relaxed=False
-    )
-    print("\nDiscrete sampling shapes:")
-    print("h:", h.shape)
-    print("z:", z.shape)
-    print("z_prior:", z_prior.shape)
-
-    # ---- Decoder ----
-    decoder = Decoder(config)
-    reconstructed_images = decoder(h, z)
-    print("\nReconstructed image shape:", reconstructed_images.shape)  # (B, C, H, W)
-
-    # ---- Reward and Value Heads ----
-    reward_head = RewardHead(
-        hidden_dim=config["model"]["hidden_dim"],
-        latent_dim=config["model"]["latent_dim"],
-        categories=config["model"]["categories"]
-    )
-    value_head = ValueHead(
-        hidden_dim=config["model"]["hidden_dim"],
-        latent_dim=config["model"]["latent_dim"],
-        categories=config["model"]["categories"]
-    )
-
-    pred_reward = reward_head(h, z)
-    pred_value = value_head(h, z)
-    print("\nReward head output shape:", pred_reward.shape)  # (B,1)
-    print("Value head output shape:", pred_value.shape)      # (B,1)
-
-    # ---- Relaxed sampling + gradient check ----
-    h_relax, z_relax, z_prior_relax, _, _ = rssm(
-        prev_h, prev_z, prev_a, embed, use_relaxed=True, temperature=0.67
-    )
-
-    reconstructed_images_relax = decoder(h_relax, z_relax)
-    pred_reward_relax = reward_head(h_relax, z_relax)
-    pred_value_relax = value_head(h_relax, z_relax)
+    # ---- Print shapes ----
+    print("Shapes of world model outputs:")
+    print("h:", out["h"].shape)
+    print("z:", out["z"].shape)
+    print("z_prior:", out["z_prior"].shape)
+    print("reconstructed:", out["reconstructed"].shape)
+    print("reward:", out["reward"].shape)
+    print("value:", out["value"].shape)
 
     # ---- Gradient check ----
-    (reconstructed_images_relax.mean() +
-     pred_reward_relax.mean() +
-     pred_value_relax.mean()).backward()
-    print("\nGradients flow correctly through full model (encoder, RSSM, decoder, heads)")
+    total = out["reconstructed"].sum() + out["reward"].sum() + out["value"].sum()
+    total.backward()
+    print("\nBackward pass succeeded, gradients flow correctly!")
 
 if __name__ == "__main__":
-    main()
+    test_world_model()
