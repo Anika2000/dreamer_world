@@ -100,3 +100,6 @@ All these losses are summed (with coefficients) to make the total world model lo
       Imagination rollouts
            |
         Policy update
+
+#TODO: on Feb 16, 2026 you will need to run the whole loop and test on actual SO-101 data trajectories
+#fix the trainer.py file and try to run it
