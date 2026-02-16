@@ -65,6 +65,12 @@ class RSSM(nn.Module):
         #output shape: (B, hidden_dim) = (8,5)
         h = self.gru(gru_input, prev_h)
         
+
+        # --- Posterior ---
+        if embed is None:
+            # During imagination: use zeros for embedding so post_net still works
+            embed = torch.zeros(h.size(0), self.post_net[0].in_features - h.size(1), device=h.device)
+
         # posterior logits (combine h and encoder embedding)
         #let embed.shape = (b, embedding_dim) = (8, 6)
         # so torch.cat([h, embed], dim=-1) --> shape: (B, hidden_dim + embedding_dim) = (8, 11)

@@ -25,8 +25,9 @@ def world_model_loss(out, obs, reward, discount=None, beta=1.0, free_nats=3.0):
     reward_loss = ((out["reward"] - reward) ** 2).mean()
     
     # KL divergence between posterior and prior
-    kl = torch.distributions.kl_divergence(out["post_dist"], out["prior_dist"])
-    kl = kl.mean()
+    post_probs = out["post_dist"].probs
+    prior_probs = out["prior_dist"].probs
+    kl = (post_probs * (post_probs.log() - prior_probs.log())).sum(-1).mean()
     kl = torch.clamp(kl, min=free_nats)
     kl_loss = beta * kl
 

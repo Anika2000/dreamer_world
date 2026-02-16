@@ -1,3 +1,7 @@
+#first: World Model Training → learns latent dynamics (h, z) from real environment.
+#second:  Imagination Rollout → generates sequences in latent space using current actor.
+#third: updates policy and value function using imagined trajectories.
+
 import torch
 import torch.optim as optim
 import yaml
@@ -8,7 +12,7 @@ from dreamer4.models.critic import Critic
 from dreamer4.training.losses import world_model_loss
 from dreamer4.training.imagination import imagination_rollout, compute_actor_critic_loss
 
-def full_train_step(config, steps=50, batch_size=8, seq_len=5, imagination_horizon=15):
+def full_train_step(config, steps=20, batch_size=4, seq_len=5, imagination_horizon=15):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     # Initialize networks
@@ -31,15 +35,15 @@ def full_train_step(config, steps=50, batch_size=8, seq_len=5, imagination_horiz
     critic_opt = optim.Adam(critic.parameters(), lr=float(config["training"]["lr"]))
 
     for step in range(steps):
-        # --- Sample dummy data (replace with real environment later) ---
+        # --- Dummy data ---
         obs = torch.randn(batch_size, seq_len, config["env"]["channels"],
-                          config["env"]["image_size"], config["env"]["image_size"]).to(device)
-        actions = torch.randn(batch_size, seq_len, config["env"]["action_dim"]).to(device)
-        rewards = torch.randn(batch_size, seq_len, 1).to(device)
+                          config["env"]["image_size"], config["env"]["image_size"], device=device)
+        actions = torch.randn(batch_size, seq_len, config["env"]["action_dim"], device=device)
+        rewards = torch.randn(batch_size, seq_len, 1, device=device)
 
         prev_h = torch.zeros(batch_size, config["model"]["hidden_dim"], device=device)
         prev_z = torch.zeros(batch_size, config["model"]["latent_dim"], config["model"]["categories"], device=device)
-        prev_z[:, :, 0] = 1  # one-hot initialization
+        prev_z[:, :, 0] = 1  # one-hot init
 
         # --- WORLD MODEL UPDATE ---
         wm_loss_total = 0
@@ -50,11 +54,19 @@ def full_train_step(config, steps=50, batch_size=8, seq_len=5, imagination_horiz
 
             out = wm(obs_t, act_t, prev_h, prev_z, use_relaxed=True)
 
-            wm_loss, obs_loss, reward_loss, kl_loss, discount_loss = world_model_loss(
+            # For dummy data, ignore discount_loss if not returned
+            wm_loss_tuple = world_model_loss(
                 out, obs_t, reward_t,
                 discount=torch.ones(batch_size, 1, device=device) * 0.999,
                 beta=float(config["training"]["kl_scale"])
             )
+
+            # Ensure we unpack correctly (dummy loss might return 4)
+            if len(wm_loss_tuple) == 5:
+                wm_loss, obs_loss, reward_loss, kl_loss, discount_loss = wm_loss_tuple
+            else:
+                wm_loss, obs_loss, reward_loss, kl_loss = wm_loss_tuple
+
             wm_loss_total += wm_loss
 
             prev_h = out["h"].detach()
@@ -64,9 +76,8 @@ def full_train_step(config, steps=50, batch_size=8, seq_len=5, imagination_horiz
         wm_loss_total.backward()
         wm_opt.step()
 
-        # --- IMAGINATION ROLLOUT + ACTOR/CRITIC UPDATE ---
+        # --- IMAGINATION + ACTOR/CRITIC UPDATE ---
         imagined_h, imagined_z, _ = imagination_rollout(wm.rssm, actor, prev_h, prev_z, horizon=imagination_horizon)
-
         actor_loss, critic_loss = compute_actor_critic_loss(wm.value_head, imagined_h, imagined_z)
 
         actor_opt.zero_grad()
@@ -78,12 +89,10 @@ def full_train_step(config, steps=50, batch_size=8, seq_len=5, imagination_horiz
         critic_opt.step()
 
         if step % 5 == 0:
-            print(f"Step {step}, WM Loss: {wm_loss_total.item():.4f}, "
-                  f"Actor Loss: {actor_loss.item():.4f}, Critic Loss: {critic_loss.item():.4f}")
-
+            print(f"Step {step} | WM Loss: {wm_loss_total.item():.4f} | "
+                  f"Actor Loss: {actor_loss.item():.4f} | Critic Loss: {critic_loss.item():.4f}")
 
 if __name__ == "__main__":
-    # Load YAML config
     with open("configs/default.yaml") as f:
         config = yaml.safe_load(f)
 
