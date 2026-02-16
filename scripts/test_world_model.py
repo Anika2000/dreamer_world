@@ -1,7 +1,8 @@
 import torch
 from dreamer4.models.encoder import Encoder
 from dreamer4.models.rssm import RSSM
-from dreamer4.models.decoder import Decoder  # make sure you have this implemented
+from dreamer4.models.decoder import Decoder
+from dreamer4.models.heads import RewardHead, ValueHead
 
 def main():
     # ---- Configuration ----
@@ -32,7 +33,7 @@ def main():
         config["model"]["latent_dim"],
         config["model"]["categories"],
     )
-    prev_z[:, :, 0] = 1
+    prev_z[:, :, 0] = 1  # initial one-hot latent
 
     # ---- Encoder ----
     encoder = Encoder(config)
@@ -52,7 +53,6 @@ def main():
     h, z, z_prior, post_dist, prior_dist = rssm(
         prev_h, prev_z, prev_a, embed, use_relaxed=False
     )
-
     print("\nDiscrete sampling shapes:")
     print("h:", h.shape)
     print("z:", z.shape)
@@ -61,8 +61,24 @@ def main():
     # ---- Decoder ----
     decoder = Decoder(config)
     reconstructed_images = decoder(h, z)
-    print("\nReconstructed image shape:", reconstructed_images.shape)
-    # should be (B, channels, 64, 64)
+    print("\nReconstructed image shape:", reconstructed_images.shape)  # (B, C, H, W)
+
+    # ---- Reward and Value Heads ----
+    reward_head = RewardHead(
+        hidden_dim=config["model"]["hidden_dim"],
+        latent_dim=config["model"]["latent_dim"],
+        categories=config["model"]["categories"]
+    )
+    value_head = ValueHead(
+        hidden_dim=config["model"]["hidden_dim"],
+        latent_dim=config["model"]["latent_dim"],
+        categories=config["model"]["categories"]
+    )
+
+    pred_reward = reward_head(h, z)
+    pred_value = value_head(h, z)
+    print("\nReward head output shape:", pred_reward.shape)  # (B,1)
+    print("Value head output shape:", pred_value.shape)      # (B,1)
 
     # ---- Relaxed sampling + gradient check ----
     h_relax, z_relax, z_prior_relax, _, _ = rssm(
@@ -70,11 +86,14 @@ def main():
     )
 
     reconstructed_images_relax = decoder(h_relax, z_relax)
-    print("Reconstructed image shape (relaxed):", reconstructed_images_relax.shape)
+    pred_reward_relax = reward_head(h_relax, z_relax)
+    pred_value_relax = value_head(h_relax, z_relax)
 
-    # Gradient test
-    reconstructed_images_relax.mean().backward()
-    print("\nGradients flow correctly through decoder + relaxed z")
+    # ---- Gradient check ----
+    (reconstructed_images_relax.mean() +
+     pred_reward_relax.mean() +
+     pred_value_relax.mean()).backward()
+    print("\nGradients flow correctly through full model (encoder, RSSM, decoder, heads)")
 
 if __name__ == "__main__":
     main()

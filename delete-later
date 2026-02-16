@@ -67,3 +67,10 @@ dreamer4/
 # - so the envionement is to collect the data from simulation (use mujoco and all that)
 # - goal is using world model to control so-101 arm (yes i need to get this asap)
 #delete the test files like test_encoder.py under the sripts folder
+
+
+; The losses are computed from the outputs:
+; Decoder → reconstructs x_t → image loss
+; Reward head → predicts r_t → reward loss
+; RSSM → prior vs posterior → KL loss
+; All these losses are summed (with coefficients) to make the total world model loss.
