@@ -81,11 +81,12 @@ def full_train_step(config, steps=20, batch_size=4, seq_len=5, imagination_horiz
         actor_loss, critic_loss = compute_actor_critic_loss(wm.value_head, imagined_h, imagined_z)
 
         actor_opt.zero_grad()
-        actor_loss.backward()
-        actor_opt.step()
-
         critic_opt.zero_grad()
-        critic_loss.backward()
+
+        total_ac_loss = actor_loss + critic_loss
+        total_ac_loss.backward()
+
+        actor_opt.step()
         critic_opt.step()
 
         if step % 5 == 0:
