@@ -3,3 +3,7 @@ torchvision
 torchaudio
 numpy
 pyyaml
+gymnasium
+mujoco
+dm-control
+mujoco-py
