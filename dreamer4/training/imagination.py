@@ -1,14 +1,15 @@
 import torch
 
 #This function is simulating trajectories in the latent space, not in the real environment.
-def imagination_rollout(rssm, actor, start_h, start_z, horizon=15):
+def imagination_rollout(rssm, actor, start_h, start_z, wm, horizon=15):
     #Input: 
     #rssm: predicts next latent states (h and z) given the current latent state and an action.
     """
     Rollout imagined trajectories in latent space using current actor.
+    Returns imagined hidden states, latent states, actions, predicted rewards, and discounts.
     """
     h, z = start_h, start_z
-    imagined_h, imagined_z, actions = [], [], []
+    imagined_h, imagined_z, actions, rewards, discounts = [], [], [], [], []
 
     for t in range(horizon):
         #Take the current latent state (h, z).
@@ -19,6 +20,10 @@ def imagination_rollout(rssm, actor, start_h, start_z, horizon=15):
         imagined_h.append(h)
         imagined_z.append(z)
         actions.append(a)
+        r = wm.reward_head(h, z)
+        d = wm.discount_head(h, z)
+        rewards.append(r)
+        discounts.append(d)
 
     # Stack tensors along time dimension: (T, B, hidden_dim)
     #T = time steps / horizon of imagination
@@ -30,14 +35,27 @@ def imagination_rollout(rssm, actor, start_h, start_z, horizon=15):
     #Shape of actions: (T, B, action_dim)
     actions = torch.stack(actions, dim=0)
 
-    return imagined_h, imagined_z, actions
+    return imagined_h, imagined_z, actions, rewards, discounts
 
-def compute_actor_critic_loss(value_head, imagined_h, imagined_z, gamma=0.99, lam=0.95):
+def compute_actor_critic_loss(value_head, imagined_h, imagined_z, pred_rewards, pred_discounts, gamma=0.99, lam=0.95):
     #Inputs: 
     #value_head predicts the expected return for each latent state.
     #imagined_h and imagined_z are the imagined trajectories.
     """
-    Compute actor + critic losses along imagined trajectories.
+    Compute Dreamer V2-style actor and critic losses along imagined trajectories.
+    
+    Args:
+        value_head: the value network predicting expected returns.
+        imagined_h, imagined_z: tensors of shape (T, B, hidden_dim/latent_dim).
+        pred_rewards: predicted rewards along imagined trajectory, shape (T, B)
+        pred_discounts: predicted discounts along imagined trajectory, shape (T, B)
+        gamma: discount factor
+        lam: lambda for TD(lambda)
+        entropy_coef: optional coefficient for actor entropy regularization
+        imagined_a: actions along imagined trajectory, used for entropy regularization
+    
+    Returns:
+        actor_loss, critic_loss (scalars)
     """
     horizon, batch_size, _ = imagined_h.shape
 

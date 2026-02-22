@@ -123,25 +123,43 @@ def full_train_step(config, steps=50, batch_size=2, seq_len=5, buffer_size=100, 
         wm_opt.step()
 
         # -----------------------------
-        # IMAGINATION + ACTOR/CRITIC
+        # IMAGINATION + ACTOR/CRITIC (Dreamer V2 style)
         # -----------------------------
-        imagined_h, imagined_z, imagined_a = imagination_rollout(wm.rssm, actor, prev_h, prev_z, horizon=10)
+        h_actor, z_actor = prev_h.detach(), prev_z.detach()  # stop gradients from world model
+        imagined_h, imagined_z, imagined_a, pred_rewards, pred_discounts = imagination_rollout(
+            wm.rssm, actor, h_actor, z_actor, wm=wm, horizon=10
+        )
+        # Convert lists to tensors
+        pred_rewards = torch.stack(pred_rewards, dim=0).squeeze(-1)
+        pred_discounts = torch.stack(pred_discounts, dim=0).squeeze(-1)
 
-        # Stop gradients through RSSM for actor
-        imagined_h_actor = imagined_h.detach()
-        imagined_z_actor = imagined_z.detach()
+        # Compute predicted values for imagined states
+        values = torch.stack(
+            [wm.value_head(h, z) for h, z in zip(imagined_h, imagined_z)], dim=0
+        ).squeeze(-1)  # shape: (T, B)
 
-        # Get predicted rewards from world model for imagination
-        pred_rewards = torch.stack([wm.reward_head(h, z) for h, z in zip(imagined_h, imagined_z)], dim=0).squeeze(-1)
-        pred_discounts = torch.stack([wm.discount_head(h, z) for h, z in zip(imagined_h, imagined_z)], dim=0).squeeze(-1)
+        # Lambda-return computation (TD(lambda)) with predicted rewards & discounts
+        horizon, batch_size = values.shape
+        returns = torch.zeros_like(values)
+        G = torch.zeros(batch_size, device=values.device)
+        gamma = 0.99
+        lam = 0.95
+        for t in reversed(range(horizon)):
+            G = pred_rewards[t] + pred_discounts[t] * ((1 - lam) * values[t] + lam * G)
+            returns[t] = G
 
-        # Actor/critic losses using predicted rewards
-        actor_loss, critic_loss = compute_actor_critic_loss(target_critic, imagined_h_actor, imagined_z_actor)
+        # Critic loss: MSE between value predictions and lambda-returns
+        critic_loss = ((values - returns)**2).mean()
 
-        # Entropy regularization for exploration
-        action_entropy = -imagined_a.mean()  # placeholder: approximate entropy
+        # Actor loss: maximize imagined returns
+        actor_loss = -returns.mean()
+
+        # Optional entropy regularization for exploration
+        entropy_coef = 1e-3  # small coefficient
+        action_entropy = -imagined_a.mean()  # approximate
         actor_loss -= entropy_coef * action_entropy
 
+        # Optimize actor and critic
         actor_opt.zero_grad()
         critic_opt.zero_grad()
         (actor_loss + critic_loss).backward()
