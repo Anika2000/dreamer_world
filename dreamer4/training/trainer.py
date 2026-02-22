@@ -24,7 +24,7 @@ def collect_trajectories(env, actor, buffer, seq_len=5, num_sequences=10, device
         # Initialize hidden and latent states
         prev_h = torch.zeros(1, actor.fc[0].in_features - env.action_space.shape[0], device=device)
         prev_z = torch.zeros(1, actor.fc[0].in_features - prev_h.size(1), 1, device=device)
-        prev_z[:, :, 0] = 1  # first category active
+        prev_z[:, :, 0] = 1
 
         for t in range(seq_len):
             obs_tensor = torch.tensor(obs.transpose(2, 0, 1), dtype=torch.float32, device=device).unsqueeze(0)/255.0
@@ -49,17 +49,12 @@ def collect_trajectories(env, actor, buffer, seq_len=5, num_sequences=10, device
     print(f"Collected {num_sequences} sequences. Buffer size: {len(buffer)}")
 
 
-def full_train_step(config, steps=50, batch_size=2, seq_len=5, buffer_size=100, tau=0.99):
+def full_train_step(config, steps=50, batch_size=2, seq_len=5, buffer_size=100, tau=0.99,
+                    kl_beta=1.0, entropy_coef=1e-2):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    # -----------------------------
-    # Environment
-    # -----------------------------
     env = SO101Env(image_size=config["env"]["image_size"])
 
-    # -----------------------------
-    # Networks
-    # -----------------------------
     wm = WorldModel(config).to(device)
     actor = Actor(
         hidden_dim=config["model"]["hidden_dim"],
@@ -72,8 +67,6 @@ def full_train_step(config, steps=50, batch_size=2, seq_len=5, buffer_size=100, 
         latent_dim=config["model"]["latent_dim"],
         categories=config["model"]["categories"]
     ).to(device)
-
-    # Target critic for EMA
     target_critic = Critic(
         hidden_dim=config["model"]["hidden_dim"],
         latent_dim=config["model"]["latent_dim"],
@@ -81,16 +74,10 @@ def full_train_step(config, steps=50, batch_size=2, seq_len=5, buffer_size=100, 
     ).to(device)
     target_critic.load_state_dict(critic.state_dict())
 
-    # -----------------------------
-    # Optimizers
-    # -----------------------------
     wm_opt = optim.Adam(wm.parameters(), lr=float(config["training"]["lr"]))
     actor_opt = optim.Adam(actor.parameters(), lr=float(config["training"]["lr"]))
     critic_opt = optim.Adam(critic.parameters(), lr=float(config["training"]["lr"]))
 
-    # -----------------------------
-    # Replay buffer
-    # -----------------------------
     buffer = ReplayBuffer(
         max_size=buffer_size,
         seq_len=seq_len,
@@ -98,21 +85,14 @@ def full_train_step(config, steps=50, batch_size=2, seq_len=5, buffer_size=100, 
         action_dim=config["env"]["action_dim"]
     )
 
-    # -----------------------------
-    # Collect initial data
-    # -----------------------------
     collect_trajectories(env, actor, buffer, seq_len=seq_len, num_sequences=10, device=device)
 
-    # -----------------------------
-    # Main training loop
-    # -----------------------------
     for step in range(steps):
         if len(buffer) < batch_size:
             continue
 
         obs_batch, action_batch, reward_batch = buffer.sample(batch_size)
 
-        # Initialize hidden/latent states
         prev_h = torch.zeros(batch_size, config["model"]["hidden_dim"], device=device)
         prev_z = torch.zeros(batch_size, config["model"]["latent_dim"], config["model"]["categories"], device=device)
         prev_z[:, :, 0] = 1
@@ -121,6 +101,7 @@ def full_train_step(config, steps=50, batch_size=2, seq_len=5, buffer_size=100, 
         # WORLD MODEL UPDATE
         # -----------------------------
         wm_loss_total = 0
+        kl_total = 0
         for t in range(seq_len):
             obs_t = obs_batch[:, t]
             act_t = action_batch[:, t]
@@ -130,20 +111,36 @@ def full_train_step(config, steps=50, batch_size=2, seq_len=5, buffer_size=100, 
             wm_loss_tuple = world_model_loss(out, obs_t, reward_t)
             wm_loss_total += wm_loss_tuple[0]
 
+            # KL balancing
+            kl = (out["post_dist"].probs * (out["post_dist"].probs.log() - out["prior_dist"].probs.log())).sum(-1).mean()
+            kl_total += kl_beta * kl
+
             prev_h = out["h"].detach()
             prev_z = out["z"].detach()
 
         wm_opt.zero_grad()
-        wm_loss_total.backward()
+        (wm_loss_total + kl_total).backward()
         wm_opt.step()
 
         # -----------------------------
         # IMAGINATION + ACTOR/CRITIC
         # -----------------------------
-        imagined_h, imagined_z, _ = imagination_rollout(wm.rssm, actor, prev_h, prev_z, horizon=10)
+        imagined_h, imagined_z, imagined_a = imagination_rollout(wm.rssm, actor, prev_h, prev_z, horizon=10)
 
-        # Use target critic for lambda-returns
-        actor_loss, critic_loss = compute_actor_critic_loss(target_critic, imagined_h, imagined_z)
+        # Stop gradients through RSSM for actor
+        imagined_h_actor = imagined_h.detach()
+        imagined_z_actor = imagined_z.detach()
+
+        # Get predicted rewards from world model for imagination
+        pred_rewards = torch.stack([wm.reward_head(h, z) for h, z in zip(imagined_h, imagined_z)], dim=0).squeeze(-1)
+        pred_discounts = torch.stack([wm.discount_head(h, z) for h, z in zip(imagined_h, imagined_z)], dim=0).squeeze(-1)
+
+        # Actor/critic losses using predicted rewards
+        actor_loss, critic_loss = compute_actor_critic_loss(target_critic, imagined_h_actor, imagined_z_actor)
+
+        # Entropy regularization for exploration
+        action_entropy = -imagined_a.mean()  # placeholder: approximate entropy
+        actor_loss -= entropy_coef * action_entropy
 
         actor_opt.zero_grad()
         critic_opt.zero_grad()
@@ -151,17 +148,12 @@ def full_train_step(config, steps=50, batch_size=2, seq_len=5, buffer_size=100, 
         actor_opt.step()
         critic_opt.step()
 
-        # -----------------------------
-        # EMA update of target critic
-        # -----------------------------
+        # EMA update
         for param, target_param in zip(critic.parameters(), target_critic.parameters()):
             target_param.data = tau * target_param.data + (1 - tau) * param.data
 
-        # -----------------------------
-        # Logging
-        # -----------------------------
         if step % 5 == 0:
-            print(f"Step {step} | WM Loss: {wm_loss_total.item():.4f} | "
+            print(f"Step {step} | WM Loss: {wm_loss_total.item():.4f} | KL: {kl_total.item():.4f} | "
                   f"Actor: {actor_loss.item():.4f} | Critic: {critic_loss.item():.4f} | Buffer: {len(buffer)}")
 
 
