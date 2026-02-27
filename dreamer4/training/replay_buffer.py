@@ -14,11 +14,11 @@ class ReplayBuffer:
         self.obs_buf = np.zeros((max_size, seq_len, *obs_shape), dtype=np.uint8)
         self.action_buf = np.zeros((max_size, seq_len, action_dim), dtype=np.float32)
         self.reward_buf = np.zeros((max_size, seq_len, 1), dtype=np.float32)
-
+        self.done_buf = np.zeros((max_size, seq_len, 1), dtype=np.float32)  # 1 if done, 0 otherwise
         self.ptr = 0
         self.size = 0
 
-    def add_sequence(self, obs_seq, action_seq, reward_seq):
+    def add_sequence(self, obs_seq, action_seq, reward_seq, done_seq):
         """
         Add a full sequence of (obs, action, reward) to the buffer.
         obs_seq: (seq_len, C, H, W) numpy array
@@ -28,7 +28,7 @@ class ReplayBuffer:
         self.obs_buf[self.ptr] = obs_seq
         self.action_buf[self.ptr] = action_seq
         self.reward_buf[self.ptr] = reward_seq
-
+        self.done_buf[self.ptr] = done_seq
         self.ptr = (self.ptr + 1) % self.max_size
         self.size = min(self.size + 1, self.max_size)
 
@@ -41,7 +41,17 @@ class ReplayBuffer:
         obs_batch = torch.tensor(self.obs_buf[idxs], dtype=torch.float32, device=self.device) / 255.0
         action_batch = torch.tensor(self.action_buf[idxs], dtype=torch.float32, device=self.device)
         reward_batch = torch.tensor(self.reward_buf[idxs], dtype=torch.float32, device=self.device)
-        return obs_batch, action_batch, reward_batch
+        done_batch = torch.tensor(self.done_buf[idxs], dtype=torch.float32, device=self.device)
+
+        return obs_batch, action_batch, reward_batch, done_batch
+    
+    def compute_discounts(self, done_batch, gamma=0.99):
+        """
+        Compute discount tensor for each step: discount_t = gamma * (1 - done)
+        done_batch: (B, seq_len, 1)
+        Returns: discount tensor same shape as done_batch
+        """
+        return gamma * (1.0 - done_batch)
 
     def __len__(self):
         return self.size

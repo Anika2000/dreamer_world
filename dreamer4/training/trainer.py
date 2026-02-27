@@ -10,7 +10,7 @@ from dreamer4.models.world_model import WorldModel
 from dreamer4.models.actor import Actor
 from dreamer4.models.critic import Critic
 from dreamer4.training.losses import world_model_loss
-from dreamer4.training.imagination import imagination_rollout, compute_actor_critic_loss
+from dreamer4.training.imagination import imagination_rollout
 from dreamer4.envs.so101_env import SO101Env
 from dreamer4.training.replay_buffer import ReplayBuffer
 
@@ -18,7 +18,7 @@ from dreamer4.training.replay_buffer import ReplayBuffer
 def collect_trajectories(env, actor, buffer, seq_len=5, num_sequences=10, device="cpu"):
     actor.eval()
     for seq_idx in range(num_sequences):
-        obs_seq, action_seq, reward_seq = [], [], []
+        obs_seq, action_seq, reward_seq, done_seq = [], [], [], []
         obs, _ = env.reset()
 
         # Initialize hidden and latent states
@@ -36,7 +36,7 @@ def collect_trajectories(env, actor, buffer, seq_len=5, num_sequences=10, device
             obs_seq.append(obs)
             action_seq.append(action)
             reward_seq.append([reward])
-
+            done_seq.append([done])
             obs = next_obs
             if done:
                 obs, _ = env.reset()
@@ -44,7 +44,8 @@ def collect_trajectories(env, actor, buffer, seq_len=5, num_sequences=10, device
         buffer.add_sequence(
             np.array(obs_seq, dtype=np.uint8).transpose(0, 3, 1, 2),
             np.array(action_seq, dtype=np.float32),
-            np.array(reward_seq, dtype=np.float32)
+            np.array(reward_seq, dtype=np.float32),
+            np.array(done_seq, dtype=np.float32)
         )
     print(f"Collected {num_sequences} sequences. Buffer size: {len(buffer)}")
 
@@ -91,7 +92,7 @@ def full_train_step(config, steps=50, batch_size=2, seq_len=5, buffer_size=100, 
         if len(buffer) < batch_size:
             continue
 
-        obs_batch, action_batch, reward_batch = buffer.sample(batch_size)
+        obs_batch, action_batch, reward_batch, done_batch = buffer.sample(batch_size)
 
         prev_h = torch.zeros(batch_size, config["model"]["hidden_dim"], device=device)
         prev_z = torch.zeros(batch_size, config["model"]["latent_dim"], config["model"]["categories"], device=device)
@@ -101,25 +102,20 @@ def full_train_step(config, steps=50, batch_size=2, seq_len=5, buffer_size=100, 
         # WORLD MODEL UPDATE
         # -----------------------------
         wm_loss_total = 0
-        kl_total = 0
         for t in range(seq_len):
             obs_t = obs_batch[:, t]
             act_t = action_batch[:, t]
             reward_t = reward_batch[:, t]
-
+            discount_t = buffer.compute_discounts(done_batch[:, t], gamma=0.99)
             out = wm(obs_t, act_t, prev_h, prev_z, use_relaxed=True)
-            wm_loss_tuple = world_model_loss(out, obs_t, reward_t)
-            wm_loss_total += wm_loss_tuple[0]
+            loss = world_model_loss(out, obs_t, reward_t, discount_t, beta=kl_beta, alpha=0.8)
+            wm_loss_total += loss
 
-            # KL balancing
-            kl = (out["post_dist"].probs * (out["post_dist"].probs.log() - out["prior_dist"].probs.log())).sum(-1).mean()
-            kl_total += kl_beta * kl
-
-            prev_h = out["h"].detach()
-            prev_z = out["z"].detach()
-
+            prev_h = out["h"]
+            prev_z = out["z"]
+        wm_loss_total = wm_loss_total / seq_len
         wm_opt.zero_grad()
-        (wm_loss_total + kl_total).backward()
+        wm_loss_total.backward() # Only use wm_loss_total
         wm_opt.step()
 
         # -----------------------------
@@ -171,8 +167,10 @@ def full_train_step(config, steps=50, batch_size=2, seq_len=5, buffer_size=100, 
             target_param.data = tau * target_param.data + (1 - tau) * param.data
 
         if step % 5 == 0:
-            print(f"Step {step} | WM Loss: {wm_loss_total.item():.4f} | KL: {kl_total.item():.4f} | "
-                  f"Actor: {actor_loss.item():.4f} | Critic: {critic_loss.item():.4f} | Buffer: {len(buffer)}")
+            print(f"Step {step} | WM Loss: {wm_loss_total.item():.4f} | "
+                    f"Actor: {actor_loss.item():.4f} | "
+                    f"Critic: {critic_loss.item():.4f} | "
+                    f"Buffer: {len(buffer)}")
 
 
 if __name__ == "__main__":

@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 
-def world_model_loss(out, obs, reward, discount=None, beta=1.0, free_nats=3.0):
+def world_model_loss(out, obs, reward, discount, beta=1.0, alpha=0.8):
     """
     Computes the losses for the WorldModel.
     
@@ -24,22 +24,28 @@ def world_model_loss(out, obs, reward, discount=None, beta=1.0, free_nats=3.0):
     # Reward prediction loss (MSE)
     reward_loss = ((out["reward"] - reward) ** 2).mean()
     
-    # KL divergence between posterior and prior
+    #discount loss (Bernoulli likelihood)
+    discount_loss = torch.nn.functional.binary_cross_entropy_with_logits(
+        out["discount"], discount
+    )
+
+    #########################
+    # KL Balancing: # KL divergence between posterior and prior
+    #########################
     post_probs = out["post_dist"].probs
     prior_probs = out["prior_dist"].probs
-    kl = (post_probs * (post_probs.log() - prior_probs.log())).sum(-1).mean()
-    kl = torch.clamp(kl, min=free_nats)
-    kl_loss = beta * kl
+    # KL where gradient flows only into prior
+    kl_prior = (post_probs.detach() * (post_probs.detach().log() - prior_probs.log())).sum(-1).mean()
 
-        # Discount loss 
-    if discount is not None:
-        pred_discount = out["discount"]
-        discount_loss = nn.functional.mse_loss(pred_discount, discount)
-    else:
-        discount_loss = 0.0
+
+    # KL where gradient flows only into posterior
+    kl_post = (post_probs * (post_probs.log() - prior_probs.detach().log())).sum(-1).mean()
+
+    # Balanced KL (Section 2.1)
+    kl_balanced = alpha * kl_prior + (1 - alpha) * kl_post
     
     # Total loss
-    total_loss = obs_loss + reward_loss + kl_loss + discount_loss
-    return total_loss, obs_loss, reward_loss, kl_loss, discount_loss
+    total_loss = obs_loss + reward_loss + discount_loss + beta * kl_balanced
+    return total_loss
 
 
