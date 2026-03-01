@@ -22,14 +22,14 @@ def collect_trajectories(env, actor, buffer, seq_len=5, num_sequences=10, device
         obs, _ = env.reset()
 
         # Initialize hidden and latent states
-        prev_h = torch.zeros(1, actor.fc[0].in_features - env.action_space.shape[0], device=device)
-        prev_z = torch.zeros(1, actor.fc[0].in_features - prev_h.size(1), 1, device=device)
+        prev_h = torch.zeros(1, config["model"]["hidden_dim"], device=device)
+        prev_z = torch.zeros(1, config["model"]["latent_dim"], config["model"]["categories"], device=device)
         prev_z[:, :, 0] = 1
 
         for t in range(seq_len):
             obs_tensor = torch.tensor(obs.transpose(2, 0, 1), dtype=torch.float32, device=device).unsqueeze(0)/255.0
             with torch.no_grad():
-                action = actor(prev_h, prev_z).cpu().numpy()[0]
+                action = actor(prev_h, prev_z)[0].cpu().numpy()[0]
 
             next_obs, reward, done, truncated, _ = env.step(action)
 
@@ -122,7 +122,7 @@ def full_train_step(config, steps=50, batch_size=2, seq_len=5, buffer_size=100, 
         # IMAGINATION + ACTOR/CRITIC (Dreamer V2 style)
         # -----------------------------
         h_actor, z_actor = prev_h.detach(), prev_z.detach()  # stop gradients from world model
-        imagined_h, imagined_z, imagined_a, pred_rewards, pred_discounts = imagination_rollout(
+        imagined_h, imagined_z, imagined_a, imagined_log_probs, pred_rewards, pred_discounts = imagination_rollout(
             wm.rssm, actor, h_actor, z_actor, wm=wm, horizon=10
         )
         # Convert lists to tensors
@@ -131,8 +131,14 @@ def full_train_step(config, steps=50, batch_size=2, seq_len=5, buffer_size=100, 
 
         # Compute predicted values for imagined states
         values = torch.stack(
-            [wm.value_head(h, z) for h, z in zip(imagined_h, imagined_z)], dim=0
+            [critic(h.detach(), z.detach()) for h, z in zip(imagined_h, imagined_z)], dim=0
         ).squeeze(-1)  # shape: (T, B)
+        
+        with torch.no_grad():
+            target_values = torch.stack(
+                [target_critic(h.detach(), z.detach()) for h, z in zip(imagined_h, imagined_z)],
+                dim=0
+            ).squeeze(-1)
 
         # Lambda-return computation (TD(lambda)) with predicted rewards & discounts
         horizon, batch_size = values.shape
@@ -141,19 +147,14 @@ def full_train_step(config, steps=50, batch_size=2, seq_len=5, buffer_size=100, 
         gamma = 0.99
         lam = 0.95
         for t in reversed(range(horizon)):
-            G = pred_rewards[t] + pred_discounts[t] * ((1 - lam) * values[t] + lam * G)
+            G = pred_rewards[t] + pred_discounts[t] * ((1 - lam) * target_values[t] + lam * G)
             returns[t] = G
 
         # Critic loss: MSE between value predictions and lambda-returns
         critic_loss = ((values - returns)**2).mean()
 
         # Actor loss: maximize imagined returns
-        actor_loss = -returns.mean()
-
-        # Optional entropy regularization for exploration
-        entropy_coef = 1e-3  # small coefficient
-        action_entropy = -imagined_a.mean()  # approximate
-        actor_loss -= entropy_coef * action_entropy
+        actor_loss = -(returns.detach() * imagined_log_probs.squeeze(-1)).mean()
 
         # Optimize actor and critic
         actor_opt.zero_grad()

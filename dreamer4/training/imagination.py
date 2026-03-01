@@ -9,11 +9,12 @@ def imagination_rollout(rssm, actor, start_h, start_z, wm, horizon=15):
     Returns imagined hidden states, latent states, actions, predicted rewards, and discounts.
     """
     h, z = start_h, start_z
-    imagined_h, imagined_z, actions, rewards, discounts = [], [], [], [], []
+    imagined_h, imagined_z, actions, log_probs, rewards, discounts = [], [], [], [], [], []
 
     for t in range(horizon):
         #Take the current latent state (h, z).
-        a = actor(h, z)                 # action from policy
+        a, log_prob = actor(h, z)                 # action from policy
+        log_probs.append(log_prob)
         #Feed it into rssm along with the action from the current actor.
         #Get the next latent state (h_next, z_next).
         h, z, _, _, _ = rssm(h, z, a, embed=None, use_relaxed=True)  # imagined next latent
@@ -32,12 +33,13 @@ def imagination_rollout(rssm, actor, start_h, start_z, wm, horizon=15):
     #Shape of imagined_h and imagined_z: (T, B, hidden_dim/latent_dim)
     imagined_h = torch.stack(imagined_h, dim=0)
     imagined_z = torch.stack(imagined_z, dim=0)
+    log_probs = torch.stack(log_probs, dim=0)
     #Shape of actions: (T, B, action_dim)
     actions = torch.stack(actions, dim=0)
 
-    return imagined_h, imagined_z, actions, rewards, discounts
+    return imagined_h, imagined_z, actions, log_probs, rewards, discounts
 
-def compute_actor_critic_loss(value_head, imagined_h, imagined_z, pred_rewards, pred_discounts, gamma=0.99, lam=0.95):
+def compute_actor_critic_loss(value_head, imagined_h, imagined_z, pred_rewards, imagined_log_probs, pred_discounts, gamma=0.99, lam=0.95):
     #Inputs: 
     #value_head predicts the expected return for each latent state.
     #imagined_h and imagined_z are the imagined trajectories.
@@ -95,6 +97,6 @@ def compute_actor_critic_loss(value_head, imagined_h, imagined_z, pred_rewards, 
     critic_loss = ((values - returns)**2).mean()
 
     # Actor loss = maximize imagined returns (gradient ascent)
-    actor_loss = -returns.mean()
+    actor_loss = -(returns.detach() * imagined_log_probs.squeeze(-1)).mean()
 
     return actor_loss, critic_loss
