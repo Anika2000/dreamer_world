@@ -41,14 +41,57 @@ class SO101Env(gym.Env):
         return obs, info
 
     def step(self, action):
-        action = np.clip(action, -1, 1)
-        self.data.qvel[:] = action * 0.5
+        """
+        Executes one simulation step using MuJoCo actuators correctly.
+
+        IMPORTANT FIX:
+        We no longer write to qvel directly.
+        Instead, we send control signals to the actuators via data.ctrl.
+        This allows MuJoCo to apply proper position control dynamics.
+        """
+
+        # 1 Clip action to [-1, 1]
+        # Your actor outputs tanh, so this keeps safety in case of numerical drift.
+        action = np.clip(action, -1.0, 1.0)
+
+        # 2 Convert normalized action [-1,1] → actuator control range
+        # MuJoCo actuators have specific ctrlrange values defined in XML.
+        # Example from your XML:
+        #   <position name="shoulder_pan" ctrlrange="-1.91986 1.91986"/>
+        #
+        # model.actuator_ctrlrange gives us:
+        #   shape: (num_actuators, 2)
+        #   [:, 0] = minimum
+        #   [:, 1] = maximum
+
+        ctrl_low = self.model.actuator_ctrlrange[:, 0]
+        ctrl_high = self.model.actuator_ctrlrange[:, 1]
+
+        # Scale action from [-1,1] → [ctrl_low, ctrl_high]
+        scaled_action = ctrl_low + (action + 1.0) * 0.5 * (ctrl_high - ctrl_low)
+
+        # 3 Send control signals to actuators
+        # This is the CORRECT way to control MuJoCo actuators.
+        # MuJoCo will now apply position control physics properly.
+        self.data.ctrl[:] = scaled_action
+
+        # 4 Step the physics simulation
         mujoco.mj_step(self.model, self.data)
+
+        # 5 Get observation (rendered image)
         obs = self.render()
+
+        # 6 Compute reward
         reward = self.compute_reward()
+
+        # 7 Check termination
         terminated = self.is_done()
+
+        # 8 No time truncation yet
         truncated = False
+
         info = {}
+
         return obs, reward, terminated, truncated, info
     
     def compute_reward(self):
