@@ -40,6 +40,12 @@ class SO101Env(gym.Env):
         info = {}
         return obs, info
 
+    #Actor output → scaled → data.ctrl → MuJoCo physics → joint motion
+    # Position actuators work like this:
+    #     - data.ctrl[i] = desired joint position
+    #     - MuJoCo applies internal PD controller
+    #     - Physics computes forces
+    #     - Joint moves naturally
     def step(self, action):
         """
         Executes one simulation step using MuJoCo actuators correctly.
@@ -94,10 +100,17 @@ class SO101Env(gym.Env):
 
         return obs, reward, terminated, truncated, info
     
+
+    ###TODO: NEED TO DEFINE A TASK 
     def compute_reward(self):
         # get IDs
-        gripper_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_SITE, 'gripper')
+        gripper_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, 'gripper')
         cube_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, 'cube')
+            # Safety check
+        if gripper_id == -1:
+            raise ValueError("Body 'gripper' not found in model.")
+        if cube_id == -1:
+            raise ValueError("Body 'cube' not found in model.")
         # get positions
         gripper_pos = self.data.xpos[gripper_id]  # site positions are included in data.xpos
         cube_pos = self.data.xpos[cube_id]        # body positions also in data.xpos
