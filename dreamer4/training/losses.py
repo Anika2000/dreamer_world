@@ -13,13 +13,15 @@ def world_model_loss(out, obs, reward, discount, beta=1.0, alpha=0.8):
     
     Returns:
         total_loss: scalar tensor combining all losses
-        obs_loss: reconstruction loss
+        image_loss: reconstruction loss
         reward_loss: reward prediction loss
         kl_loss: KL divergence loss
         discount loss
     """
+    # Assuming out["reconstructed"] is the mean of a Gaussian distribution
+    pixel_dist = torch.distributions.Normal(out["reconstructed"], 1.0)  # fixed std dev = 1.0 or learned
     # Reconstruction loss (mean squared error)
-    obs_loss = ((out["reconstructed"] - obs) ** 2).mean()
+    image_loss = -pixel_dist.log_prob(obs).mean()
     
     # Reward prediction loss (MSE)
     reward_loss = ((out["reward"] - reward) ** 2).mean()
@@ -36,11 +38,8 @@ def world_model_loss(out, obs, reward, discount, beta=1.0, alpha=0.8):
     prior_probs = out["prior_dist"].probs
     # KL where gradient flows only into prior
     kl_prior = (post_probs.detach() * (post_probs.detach().log() - prior_probs.log())).sum(-1).mean()
-
-
     # KL where gradient flows only into posterior
     kl_post = (post_probs * (post_probs.log() - prior_probs.detach().log())).sum(-1).mean()
-
     # Balanced KL (Section 2.1)
     kl_balanced = alpha * kl_prior + (1 - alpha) * kl_post
 
@@ -49,7 +48,7 @@ def world_model_loss(out, obs, reward, discount, beta=1.0, alpha=0.8):
     free_nats = 3.0  # usually 3 nats
     kl_loss = torch.clamp(kl_balanced, min=free_nats)
     # Total loss
-    total_loss = obs_loss + reward_loss + discount_loss + beta * kl_loss
+    total_loss = image_loss + reward_loss + discount_loss + beta * kl_loss
     return total_loss
 
 
