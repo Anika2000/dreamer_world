@@ -53,9 +53,10 @@ def collect_trajectories(env, actor, buffer, seq_len=5, num_sequences=10, device
 def full_train_step(config, steps=50, batch_size=2, seq_len=5, buffer_size=100, tau=0.99,
                     kl_beta=1.0, entropy_coef=1e-2):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
+    #Environment 
     env = SO101Env(image_size=config["env"]["image_size"])
 
+    #Models
     wm = WorldModel(config).to(device)
     actor = Actor(
         hidden_dim=config["model"]["hidden_dim"],
@@ -75,10 +76,12 @@ def full_train_step(config, steps=50, batch_size=2, seq_len=5, buffer_size=100, 
     ).to(device)
     target_critic.load_state_dict(critic.state_dict())
 
+    #Optimizers
     wm_opt = optim.Adam(wm.parameters(), lr=float(config["training"]["lr"]))
     actor_opt = optim.Adam(actor.parameters(), lr=float(config["training"]["lr"]))
     critic_opt = optim.Adam(critic.parameters(), lr=float(config["training"]["lr"]))
 
+    #Replay Buffer
     buffer = ReplayBuffer(
         max_size=buffer_size,
         seq_len=seq_len,
@@ -86,12 +89,14 @@ def full_train_step(config, steps=50, batch_size=2, seq_len=5, buffer_size=100, 
         action_dim=config["env"]["action_dim"]
     )
 
+    # Collect initial trajectories
     collect_trajectories(env, actor, buffer, seq_len=seq_len, num_sequences=10, device=device)
 
     for step in range(steps):
         if len(buffer) < batch_size:
             continue
-
+        
+        # Sample a batch
         obs_batch, action_batch, reward_batch, done_batch = buffer.sample(batch_size)
 
         prev_h = torch.zeros(batch_size, config["model"]["hidden_dim"], device=device)
@@ -110,7 +115,6 @@ def full_train_step(config, steps=50, batch_size=2, seq_len=5, buffer_size=100, 
             out = wm(obs_t, act_t, prev_h, prev_z, use_relaxed=True)
             loss = world_model_loss(out, obs_t, reward_t, discount_t, beta=kl_beta, alpha=0.8)
             wm_loss_total += loss
-
             prev_h = out["h"]
             prev_z = out["z"]
         wm_loss_total = wm_loss_total / seq_len
@@ -122,10 +126,18 @@ def full_train_step(config, steps=50, batch_size=2, seq_len=5, buffer_size=100, 
         # IMAGINATION + ACTOR/CRITIC (Dreamer V2 style)
         # -----------------------------
         h_actor, z_actor = prev_h.detach(), prev_z.detach()  # stop gradients from world model
+        # Temporarily freeze world model during imagination
+        for p in wm.parameters():
+            p.requires_grad = False
+
         imagined_h, imagined_z, imagined_a, imagined_log_probs, pred_rewards, pred_discounts = imagination_rollout(
             wm.rssm, actor, h_actor, z_actor, wm=wm, horizon=10
         )
-        # Convert lists to tensors
+        # Re-enable world model gradients
+        for p in wm.parameters():
+            p.requires_grad = True
+
+        # Convert predicted rewards and discounts to tensors
         pred_rewards = torch.stack(pred_rewards, dim=0).squeeze(-1)
         pred_discounts = torch.stack(pred_discounts, dim=0).squeeze(-1)
 
@@ -152,7 +164,6 @@ def full_train_step(config, steps=50, batch_size=2, seq_len=5, buffer_size=100, 
 
         # Critic loss: MSE between value predictions and lambda-returns
         critic_loss = ((values - returns)**2).mean()
-
         # Actor loss: maximize imagined returns
         actor_loss = -(returns.detach() * imagined_log_probs.squeeze(-1)).mean()
 
