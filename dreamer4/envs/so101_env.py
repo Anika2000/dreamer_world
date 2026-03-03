@@ -101,12 +101,14 @@ class SO101Env(gym.Env):
         return obs, reward, terminated, truncated, info
     
 
-    ###TODO: NEED TO DEFINE A TASK 
+    #we give reward here whenever the pick and place works
+    # need a reward that encourages the behavior you want. 
+    # The world model and actor learn from images what sequence of actions produces high reward.
     def compute_reward(self):
         # get IDs
         gripper_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, 'gripper')
         cube_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, 'cube')
-            # Safety check
+        # Safety check
         if gripper_id == -1:
             raise ValueError("Body 'gripper' not found in model.")
         if cube_id == -1:
@@ -114,13 +116,27 @@ class SO101Env(gym.Env):
         # get positions
         gripper_pos = self.data.xpos[gripper_id]  # site positions are included in data.xpos
         cube_pos = self.data.xpos[cube_id]        # body positions also in data.xpos
-        dist = np.linalg.norm(gripper_pos - cube_pos)
-        return -dist
+            
+        dist_horizontal = np.linalg.norm(gripper_pos[:2] - cube_pos[:2])  # xy-plane distance
+        dist_vertical = cube_pos[2] - 0.05  # height above table (assuming table z=0.05)
+
+        # 4. Reward shaping
+        reach_reward = -dist_horizontal                  # closer in xy-plane → higher reward
+        lift_reward = max(dist_vertical, 0.0)           # reward for lifting above table
+        success_reward = 1.0 if dist_vertical > 0.15 else 0.0  # cube lifted above threshold
+
+        # 5. Combine rewards
+        total_reward = reach_reward + lift_reward + success_reward
+
+        return total_reward
 
     def is_done(self):
         cube_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, 'cube')
-        cube_z = self.data.xpos[cube_id][2]
-        return cube_z > 0.2
+        cube_pos = self.data.xpos[cube_id]
+        table_height = 0.05
+        success_threshold = 0.15
+        terminated = cube_pos[2] > table_height + success_threshold
+        return terminated
 
     def render(self, mode='rgb_array'):
         self.renderer.update_scene(self.data, self.cam)

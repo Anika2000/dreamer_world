@@ -54,5 +54,6 @@ class Decoder(nn.Module):
         x = x.view(x.size(0), -1, 4, 4)
         #step 5:
         x = self.deconv(x)
+        x = torch.sigmoid(x)
         #Output: (B, channels, 64, 64) → a reconstructed image
         return x

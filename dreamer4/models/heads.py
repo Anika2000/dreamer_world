@@ -50,8 +50,7 @@ class DiscountHead(nn.Module):
         self.fc = nn.Sequential(
             nn.Linear(hidden_dim + latent_dim * categories, 400),
             nn.ReLU(),
-            nn.Linear(400, 1),
-            nn.Sigmoid()  # output in [0,1]
+            nn.Linear(400, 1)
         )
 
     def forward(self, h, z):
