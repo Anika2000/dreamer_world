@@ -13,6 +13,7 @@ from dreamer4.training.losses import world_model_loss
 from dreamer4.training.imagination import imagination_rollout
 from dreamer4.envs.so101_env import SO101Env
 from dreamer4.training.replay_buffer import ReplayBuffer
+from dreamer4.utils.model_logger import ModelLogger
 
 
 def collect_trajectories(env, actor, buffer, seq_len=5, num_sequences=10, device="cpu"):
@@ -53,6 +54,9 @@ def collect_trajectories(env, actor, buffer, seq_len=5, num_sequences=10, device
 def full_train_step(config, steps=50, batch_size=2, seq_len=5, buffer_size=100, tau=0.99,
                     kl_beta=1.0, entropy_coef=1e-2):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    # Initialize the logger
+    logger = ModelLogger(log_dir="logs")
     #Environment 
     env = SO101Env(image_size=config["env"]["image_size"])
 
@@ -92,6 +96,7 @@ def full_train_step(config, steps=50, batch_size=2, seq_len=5, buffer_size=100, 
     # Collect initial trajectories
     collect_trajectories(env, actor, buffer, seq_len=seq_len, num_sequences=10, device=device)
 
+    #Training loop
     for step in range(steps):
         if len(buffer) < batch_size:
             continue
@@ -112,7 +117,14 @@ def full_train_step(config, steps=50, batch_size=2, seq_len=5, buffer_size=100, 
             act_t = action_batch[:, t]
             reward_t = reward_batch[:, t]
             discount_t = buffer.compute_discounts(done_batch[:, t], gamma=0.99)
+            # Log input observation at this step
+            for b in range(obs_batch.shape[0]):  # Loop over the batch dimension
+                logger.log_image(obs_batch[b, t], step)
             out = wm(obs_t, act_t, prev_h, prev_z, use_relaxed=True)
+            # Log latent states and rewards at each timestep
+            logger.log_latent(out["z"], step)
+            logger.log_reward(out["reward"], step)
+            # logger.log_action(act_t[t], step)  # Log the action at this timestep - is causing error will fix it later
             loss = world_model_loss(out, obs_t, reward_t, discount_t, beta=kl_beta, alpha=0.8)
             wm_loss_total += loss
             prev_h = out["h"]

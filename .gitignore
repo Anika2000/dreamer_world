@@ -27,3 +27,6 @@ dist/
 
 # VS Code
 .vscode/
+
+delete-later
+logs/
