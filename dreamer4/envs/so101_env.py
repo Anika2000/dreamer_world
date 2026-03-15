@@ -14,7 +14,7 @@ class SO101Env(gym.Env):
         model_path = "dreamer4/envs/scene.xml"
         self.model = mujoco.MjModel.from_xml_path(model_path)
         self.data = mujoco.MjData(self.model)
-        self.viewer = None
+        self.frame_skip = 20
         self.cam = mujoco.MjvCamera()
         mujoco.mjv_defaultCamera(self.cam)
         self.camera_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_CAMERA, "topview")
@@ -82,7 +82,8 @@ class SO101Env(gym.Env):
         self.data.ctrl[:] = scaled_action
 
         # 4 Step the physics simulation
-        mujoco.mj_step(self.model, self.data)
+        for _ in range(self.frame_skip):
+            mujoco.mj_step(self.model, self.data)
 
         # 5 Get observation (rendered image)
         obs = self.render()
@@ -139,6 +140,7 @@ class SO101Env(gym.Env):
         return terminated
 
     def render(self, mode='rgb_array'):
+        mujoco.mj_forward(self.model, self.data)
         self.renderer.update_scene(self.data, self.cam)
         # Now render, the camera info is implicitly part of the scene
         img = self.renderer.render()

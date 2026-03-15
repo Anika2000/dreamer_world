@@ -28,9 +28,13 @@ def collect_trajectories(env, actor, buffer, seq_len=5, num_sequences=10, device
         prev_z[:, :, 0] = 1
 
         for t in range(seq_len):
-            obs_tensor = torch.tensor(obs.transpose(2, 0, 1), dtype=torch.float32, device=device).unsqueeze(0)/255.0
-            with torch.no_grad():
-                action = actor(prev_h, prev_z)[0].cpu().numpy()[0]
+            # DEBUG: check if frames change
+            if t == 0:
+                first = obs.copy()
+            action = env.action_space.sample()
+            #obs_tensor = torch.tensor(obs.transpose(2, 0, 1), dtype=torch.float32, device=device).unsqueeze(0)/255.0
+            #with torch.no_grad():
+                #action = actor(prev_h, prev_z)[0].cpu().numpy()[0]
 
             next_obs, reward, done, truncated, _ = env.step(action)
 
@@ -39,6 +43,9 @@ def collect_trajectories(env, actor, buffer, seq_len=5, num_sequences=10, device
             reward_seq.append([reward])
             done_seq.append([done])
             obs = next_obs
+            # DEBUG: compare first and last frame
+            if t == seq_len - 1:
+                print("frame diff:", np.mean(np.abs(first - obs)))
             if done:
                 obs, _ = env.reset()
 
