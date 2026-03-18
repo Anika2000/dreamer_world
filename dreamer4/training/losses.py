@@ -45,10 +45,11 @@ def world_model_loss(out, obs, reward, discount, beta=1.0, alpha=0.8):
 
     #Free nats are a minimum threshold on KL:
     #Without this, your latent can collapse (posterior becomes equal to prior, ignoring the observation).
-    free_nats = 3.0  # usually 3 nats
-    kl_loss = torch.clamp(kl_balanced - free_nats, min=0)
+    #free_nats = 0.5 # usually 3 nats but my KL values are probably less than 3 according to GPT so idk whats happening
+    #kl_loss = torch.clamp(kl_balanced - free_nats, min=0)
+    kl_loss = kl_balanced
     # Total loss
     total_loss = image_loss + reward_loss + discount_loss + beta * kl_loss
-    return total_loss
+    return total_loss, image_loss, reward_loss, kl_loss, discount_loss
 
 

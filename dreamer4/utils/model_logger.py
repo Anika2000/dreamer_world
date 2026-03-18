@@ -23,7 +23,7 @@ class ModelLogger:
         plt.axis('off')
         plt.savefig(img_filename, bbox_inches="tight", pad_inches=0)
         plt.close()
-        print(f"Image saved at: {img_filename}")
+        #print(f"Image saved at: {img_filename}")
 
     def log_latent(self, latent, step, prefix="latent"):
         """
@@ -39,7 +39,7 @@ class ModelLogger:
         # Save it as a .npy file
         latent_filename = f"{self.log_dir}/latent_step_{step}.npy"
         np.save(latent_filename, latent.cpu().numpy())  # Now it's safe to call .numpy()
-        print(f"Latent saved at: {latent_filename}")
+        #print(f"Latent saved at: {latent_filename}")
     
     def log_reward(self, reward, step):
         """
@@ -48,7 +48,7 @@ class ModelLogger:
         reward_filename = f"{self.log_dir}/reward_step_{step}.txt"
         with open(reward_filename, 'w') as f:
             f.write(str(reward))
-        print(f"Reward saved at: {reward_filename}")
+        #print(f"Reward saved at: {reward_filename}")
     
     def log_action(self, action, step):
         """
@@ -57,4 +57,4 @@ class ModelLogger:
         action_filename = f"{self.log_dir}/action_step_{step}.txt"
         with open(action_filename, 'w') as f:
             f.write(str(action))
-        print(f"Action saved at: {action_filename}")
+        #print(f"Action saved at: {action_filename}")

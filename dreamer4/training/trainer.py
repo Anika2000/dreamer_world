@@ -16,7 +16,7 @@ from dreamer4.training.replay_buffer import ReplayBuffer
 from dreamer4.utils.model_logger import ModelLogger
 
 
-def collect_trajectories(env, actor, buffer, seq_len=5, num_sequences=10, device="cpu"):
+def collect_trajectories(env, actor, buffer, seq_len=5, num_sequences=50, device="cpu"):
     actor.eval()
     for seq_idx in range(num_sequences):
         obs_seq, action_seq, reward_seq, done_seq = [], [], [], []
@@ -31,10 +31,28 @@ def collect_trajectories(env, actor, buffer, seq_len=5, num_sequences=10, device
             # DEBUG: check if frames change
             if t == 0:
                 first = obs.copy()
-            action = env.action_space.sample()
-            #obs_tensor = torch.tensor(obs.transpose(2, 0, 1), dtype=torch.float32, device=device).unsqueeze(0)/255.0
-            #with torch.no_grad():
-                #action = actor(prev_h, prev_z)[0].cpu().numpy()[0]
+
+
+            # The reason we sometimes take random actions instead of always 
+            # using the actor is exploration:
+
+            # Early in training, the actor is untrained and its outputs are basically random. 
+            # If we only follow the actor, we might only see a very narrow set of states, 
+            # which prevents the world model from learning the full dynamics of the environment.
+
+            # Random actions help cover more of the state space, so the world 
+            # model sees more varied transitions — like the arm moving to different positions, 
+            # grabbing different objects, or failing. This improves the quality of latent dynamics learned.
+
+            # Later, as the actor improves, you can gradually reduce random actions 
+            # and rely more on the actor for trajectory collection.
+            if np.random.rand() < 0.5:
+                action = env.action_space.sample()  # random
+            else:
+                obs_tensor = torch.tensor(obs.transpose(2,0,1), dtype=torch.float32, device=device).unsqueeze(0)/255.0
+                with torch.no_grad():
+                    action, _ = actor(prev_h, prev_z)
+                    action = action.cpu().numpy()[0]
 
             next_obs, reward, done, truncated, _ = env.step(action)
 
@@ -58,8 +76,9 @@ def collect_trajectories(env, actor, buffer, seq_len=5, num_sequences=10, device
     print(f"Collected {num_sequences} sequences. Buffer size: {len(buffer)}")
 
 
-def full_train_step(config, steps=50, batch_size=2, seq_len=5, buffer_size=100, tau=0.99,
-                    kl_beta=1.0, entropy_coef=1e-2):
+#we increase the steps from 50 to 5000 so new sequences are collected from actor policy — helps generalization.
+def full_train_step(config, steps=5000, batch_size=16, seq_len=5, buffer_size=1000, tau=0.99,
+                    kl_beta=1.0, entropy_coef=1e-2, device="cuda"):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     # Initialize the logger
@@ -101,7 +120,7 @@ def full_train_step(config, steps=50, batch_size=2, seq_len=5, buffer_size=100, 
     )
 
     # Collect initial trajectories
-    collect_trajectories(env, actor, buffer, seq_len=seq_len, num_sequences=10, device=device)
+    collect_trajectories(env, actor, buffer, seq_len=seq_len, num_sequences=batch_size, device=device)
 
     #Training loop
     for step in range(steps):
@@ -119,24 +138,32 @@ def full_train_step(config, steps=50, batch_size=2, seq_len=5, buffer_size=100, 
         # WORLD MODEL UPDATE
         # -----------------------------
         wm_loss_total = 0
+        img_loss_total = 0
+        rew_loss_total = 0
+        kl_loss_total = 0
+        disc_loss_total = 0
         for t in range(seq_len):
             obs_t = obs_batch[:, t]
             act_t = action_batch[:, t]
             reward_t = reward_batch[:, t]
             discount_t = buffer.compute_discounts(done_batch[:, t], gamma=0.99)
             # Log input observation at this step
-            for b in range(obs_batch.shape[0]):  # Loop over the batch dimension
-                logger.log_image(obs_batch[b, t], step)
+            if t == 0 and step % 50 == 0:  # Log every 50 steps
+                logger.log_image(obs_batch[0, t], step) 
             out = wm(obs_t, act_t, prev_h, prev_z, use_relaxed=True)
-            # Log latent states and rewards at each timestep
-            logger.log_latent(out["z"], step)
-            logger.log_reward(out["reward"], step)
-            # logger.log_action(act_t[t], step)  # Log the action at this timestep - is causing error will fix it later
-            loss = world_model_loss(out, obs_t, reward_t, discount_t, beta=kl_beta, alpha=0.8)
+            loss, image_loss, reward_loss, kl_loss, discount_loss = world_model_loss(out, obs_t, reward_t, discount_t, beta=kl_beta, alpha=0.8)
             wm_loss_total += loss
+            img_loss_total += image_loss
+            rew_loss_total += reward_loss
+            kl_loss_total += kl_loss
+            disc_loss_total += discount_loss
             prev_h = out["h"]
             prev_z = out["z"]
         wm_loss_total = wm_loss_total / seq_len
+        img_loss_total /= seq_len
+        rew_loss_total /= seq_len
+        kl_loss_total /= seq_len
+        disc_loss_total /= seq_len
         wm_opt.zero_grad()
         wm_loss_total.backward() # Only use wm_loss_total
         wm_opt.step()
@@ -198,10 +225,18 @@ def full_train_step(config, steps=50, batch_size=2, seq_len=5, buffer_size=100, 
             target_param.data = tau * target_param.data + (1 - tau) * param.data
 
         if step % 5 == 0:
-            print(f"Step {step} | WM Loss: {wm_loss_total.item():.4f} | "
-                    f"Actor: {actor_loss.item():.4f} | "
-                    f"Critic: {critic_loss.item():.4f} | "
-                    f"Buffer: {len(buffer)}")
+            print(
+                f"Step {step} | "
+                f"WM: {wm_loss_total.item():.4f} | "
+                f"Img: {img_loss_total.item():.4f} | "
+                f"Rew: {rew_loss_total.item():.4f} | "
+                f"KL: {kl_loss_total.item():.4f} | "
+                f"Disc: {disc_loss_total.item():.4f} | "
+                f"Actor: {actor_loss.item():.4f} | "
+                f"Critic: {critic_loss.item():.4f}"
+            )
+        if step % 500 == 0 and step > 0:
+            collect_trajectories(env, actor, buffer, seq_len=seq_len, num_sequences=50, device=device)
 
 
 if __name__ == "__main__":
