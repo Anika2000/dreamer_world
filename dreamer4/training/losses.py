@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+import torch.distributions as D
 
 def world_model_loss(out, obs, reward, discount, beta=1.0, alpha=0.8):
     """
@@ -19,7 +20,7 @@ def world_model_loss(out, obs, reward, discount, beta=1.0, alpha=0.8):
         discount loss
     """
     # Assuming out["reconstructed"] is the mean of a Gaussian distribution
-    pixel_dist = torch.distributions.Normal(out["reconstructed"], 1.0)  # fixed std dev = 1.0 or learned
+    pixel_dist = D.Normal(out["reconstructed"], 1.0)  # fixed std dev = 1.0 or learned
     # Reconstruction loss (mean squared error)
     image_loss = -pixel_dist.log_prob(obs).mean()
     
@@ -27,27 +28,51 @@ def world_model_loss(out, obs, reward, discount, beta=1.0, alpha=0.8):
     reward_loss = ((out["reward"] - reward) ** 2).mean()
     
     #discount loss (Bernoulli likelihood)
-    discount_loss = torch.nn.functional.binary_cross_entropy_with_logits(
+    discount_loss = nn.functional.binary_cross_entropy_with_logits(
         out["discount"], discount
     )
+    # print("recon min/max:", out["reconstructed"].min().item(), out["reconstructed"].max().item())
+    # print("obs min/max:", obs.min().item(), obs.max().item())
 
     #########################
     # KL Balancing: # KL divergence between posterior and prior
     #########################
-    post_probs = out["post_dist"].probs
-    prior_probs = out["prior_dist"].probs
-    # KL where gradient flows only into prior
-    kl_prior = (post_probs.detach() * (post_probs.detach().log() - prior_probs.log())).sum(-1).mean()
-    # KL where gradient flows only into posterior
-    kl_post = (post_probs * (post_probs.log() - prior_probs.detach().log())).sum(-1).mean()
-    # Balanced KL (Section 2.1)
+    post_logits = out["post_dist"].logits
+    prior_logits = out["prior_dist"].logits
+
+    # Create distributions
+    post_dist = D.Categorical(logits=post_logits)
+    prior_dist = D.Categorical(logits=prior_logits)
+
+    # -----------------------------
+    # KL BALANCING (correct)
+    # -----------------------------
+
+    # IMPORTANT: no .mean() yet — keep elementwise KL
+    kl_prior = D.kl_divergence(
+        D.Categorical(logits=post_logits.detach()), prior_dist
+    )
+
+    kl_post = D.kl_divergence(
+        post_dist, D.Categorical(logits=prior_logits.detach())
+    )
+
+    # Balanced KL (Dreamer-style)
     kl_balanced = alpha * kl_prior + (1 - alpha) * kl_post
 
-    #Free nats are a minimum threshold on KL:
-    #Without this, your latent can collapse (posterior becomes equal to prior, ignoring the observation).
-    #free_nats = 0.5 # usually 3 nats but my KL values are probably less than 3 according to GPT so idk whats happening
-    #kl_loss = torch.clamp(kl_balanced - free_nats, min=0)
-    kl_loss = kl_balanced
+    # -----------------------------
+    # FREE NATS (correct placement)
+    # -----------------------------
+    free_nats = 0.01
+
+    kl_balanced = torch.maximum(
+        kl_balanced,
+        torch.tensor(free_nats, device=kl_balanced.device)
+    )
+
+    # NOW reduce to scalar
+    kl_loss = kl_balanced.mean()
+
     # Total loss
     total_loss = image_loss + reward_loss + discount_loss + beta * kl_loss
     return total_loss, image_loss, reward_loss, kl_loss, discount_loss

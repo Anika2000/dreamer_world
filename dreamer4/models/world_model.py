@@ -1,3 +1,4 @@
+import torch
 import torch.nn as nn 
 from dreamer4.models.encoder import Encoder
 from dreamer4.models.rssm import RSSM
@@ -39,7 +40,7 @@ class WorldModel(nn.Module):
         embed = self.encoder(obs)
         h, z, z_prior, post_dist, prior_dist = self.rssm(prev_h, prev_z, prev_a, embed,
                                                          use_relaxed=use_relaxed, temperature=temperature)
-        recon = self.decoder(h, z)
+        recon = torch.sigmoid(self.decoder(h, z))
         pred_reward = self.reward_head(h, z)
         pred_value = self.value_head(h, z)
         pred_discount = self.discount_head(h, z)

@@ -77,8 +77,8 @@ def collect_trajectories(env, actor, buffer, seq_len=5, num_sequences=50, device
 
 
 #we increase the steps from 50 to 5000 so new sequences are collected from actor policy — helps generalization.
-def full_train_step(config, steps=5000, batch_size=16, seq_len=5, buffer_size=1000, tau=0.99,
-                    kl_beta=1.0, entropy_coef=1e-2, device="cuda"):
+def full_train_step(config, steps=250, batch_size=16, seq_len=5, buffer_size=1000, tau=0.99,
+                    kl_beta=0.1, entropy_coef=1e-2, device="cuda"):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     # Initialize the logger
@@ -129,6 +129,13 @@ def full_train_step(config, steps=5000, batch_size=16, seq_len=5, buffer_size=10
         
         # Sample a batch
         obs_batch, action_batch, reward_batch, done_batch = buffer.sample(batch_size)
+
+        print("obs_batch min/max before scaling:", obs_batch.min(), obs_batch.max())
+
+        obs_batch = torch.tensor(obs_batch, device=device).float() 
+        action_batch = torch.tensor(action_batch, device=device).float()
+        reward_batch = torch.tensor(reward_batch, device=device).float()
+        done_batch = torch.tensor(done_batch, device=device).float()
 
         prev_h = torch.zeros(batch_size, config["model"]["hidden_dim"], device=device)
         prev_z = torch.zeros(batch_size, config["model"]["latent_dim"], config["model"]["categories"], device=device)
@@ -208,10 +215,12 @@ def full_train_step(config, steps=5000, batch_size=16, seq_len=5, buffer_size=10
             G = pred_rewards[t] + pred_discounts[t] * ((1 - lam) * target_values[t] + lam * G)
             returns[t] = G
 
+        returns = (returns - returns.mean()) / (returns.std() + 1e-8)
         # Critic loss: MSE between value predictions and lambda-returns
         critic_loss = ((values - returns)**2).mean()
         # Actor loss: maximize imagined returns
-        actor_loss = -(returns.detach() * imagined_log_probs.squeeze(-1)).mean()
+        advantage = returns - values.detach()
+        actor_loss = -(advantage * imagined_log_probs.squeeze(-1)).mean()
 
         # Optimize actor and critic
         actor_opt.zero_grad()
