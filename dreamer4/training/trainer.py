@@ -130,12 +130,7 @@ def full_train_step(config, steps=250, batch_size=16, seq_len=5, buffer_size=100
         # Sample a batch
         obs_batch, action_batch, reward_batch, done_batch = buffer.sample(batch_size)
 
-        print("obs_batch min/max before scaling:", obs_batch.min(), obs_batch.max())
-
-        obs_batch = torch.tensor(obs_batch, device=device).float() 
-        action_batch = torch.tensor(action_batch, device=device).float()
-        reward_batch = torch.tensor(reward_batch, device=device).float()
-        done_batch = torch.tensor(done_batch, device=device).float()
+        #print("obs_batch min/max before scaling:", obs_batch.min(), obs_batch.max())
 
         prev_h = torch.zeros(batch_size, config["model"]["hidden_dim"], device=device)
         prev_z = torch.zeros(batch_size, config["model"]["latent_dim"], config["model"]["categories"], device=device)
