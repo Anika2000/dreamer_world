@@ -130,8 +130,6 @@ def full_train_step(config, steps=250, batch_size=16, seq_len=5, buffer_size=100
         # Sample a batch
         obs_batch, action_batch, reward_batch, done_batch = buffer.sample(batch_size)
 
-        #print("obs_batch min/max before scaling:", obs_batch.min(), obs_batch.max())
-
         prev_h = torch.zeros(batch_size, config["model"]["hidden_dim"], device=device)
         prev_z = torch.zeros(batch_size, config["model"]["latent_dim"], config["model"]["categories"], device=device)
         prev_z[:, :, 0] = 1
